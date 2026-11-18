@@ -199,12 +199,32 @@ jobs:
             echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
         fi
 
+    - name: Patch kernel for latest KernelSU
+      if: env.ENABLE_KERNELSU == 'true'
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        # KernelSU v3.2.4 起删除了 ksu_handle_slow_avc_audit_new()，
+        # avc log 隐藏改成运行时 hook slow_avc_audit（kernel/downstream/slow_avc_audit_defs.h）。
+        # 本内核树的 security/selinux/avc.c 里还留着旧 extras API 的调用，
+        # 用最新 KernelSU 会在链接 vmlinux 时报 undefined symbol，这里把它去掉。
+        if grep -q "ksu_handle_slow_avc_audit_new" security/selinux/avc.c; then
+          sed -i '/ksu_handle_slow_avc_audit_new/d' security/selinux/avc.c
+          sed -i '/if (!tclass)/,+1d' security/selinux/avc.c
+          echo "[+] removed legacy ksu slow_avc_audit hook from avc.c"
+        else
+          echo "[-] no legacy ksu hook in avc.c, skip"
+        fi
+        if grep -q "ksu_handle_slow_avc_audit_new" security/selinux/avc.c; then
+          echo "[!] failed to strip legacy ksu hook"; exit 1
+        fi
+
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash
+        curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s "${{ env.KERNELSU_TAG }}"
         KSU_VERSION=$(cd KernelSU && expr $(/usr/bin/git rev-list --count HEAD) + 29923)
+        echo "KernelSU version: $(cd KernelSU && /usr/bin/git describe --tags --always)"
         echo "UPLOADNAME=-KernelSU_$KSU_VERSION" >> $GITHUB_ENV
 
     - name: Setup Configuration for Kernel
